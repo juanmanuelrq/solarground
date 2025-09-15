@@ -1,23 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import List, Dict, Any
 import json
 
 app = FastAPI(title="Mapa con Herramientas de Dibujo", version="1.0.0")
 
-# Modelo para recibir los datos del polígono
-class Polygon(BaseModel):
-    coordinates: List[List[float]]  # [[lat, lng], [lat, lng], ...]
-    properties: Dict[str, Any] = {}
-
-class PolygonResponse(BaseModel):
-    id: str
-    coordinates: List[List[float]]
-    properties: Dict[str, Any]
-
-# Almacenamiento temporal de polígonos (en producción usar base de datos)
+# Almacenamiento temporal de polígonos
 polygons_storage = {}
 polygon_counter = 0
 
@@ -205,7 +192,6 @@ async def get_map():
 
             // Funciones para los botones de control
             function enablePolygonDrawing() {
-                // La funcionalidad ya está habilitada por defecto
                 alert('Usa las herramientas de dibujo en la esquina superior derecha del mapa');
             }
 
@@ -216,7 +202,6 @@ async def get_map():
             function clearAllPolygons() {
                 if (confirm('¿Estás seguro de que quieres eliminar todos los polígonos?')) {
                     drawnItems.clearLayers();
-                    // También limpiar del servidor
                     fetch('/polygons/clear', { method: 'DELETE' })
                         .then(response => response.json())
                         .then(data => {
@@ -231,10 +216,8 @@ async def get_map():
                 fetch('/polygons')
                     .then(response => response.json())
                     .then(polygons => {
-                        // Limpiar polígonos actuales
                         drawnItems.clearLayers();
                         
-                        // Cargar polígonos desde el servidor
                         polygons.forEach(polygon => {
                             const latlngs = polygon.coordinates.map(coord => [coord[0], coord[1]]);
                             const polygonLayer = L.polygon(latlngs, {
@@ -316,31 +299,73 @@ async def get_map():
     """
     return HTMLResponse(content=html_content)
 
-@app.post("/polygons", response_model=PolygonResponse)
-async def create_polygon(polygon: Polygon):
-    """Crear un nuevo polígono"""
+def validate_polygon_data(data):
+    """Validación manual básica de los datos del polígono"""
+    if not isinstance(data, dict):
+        return False, "Los datos deben ser un objeto JSON"
+    
+    if 'coordinates' not in data:
+        return False, "Faltan las coordenadas"
+    
+    coordinates = data['coordinates']
+    if not isinstance(coordinates, list):
+        return False, "Las coordenadas deben ser una lista"
+    
+    if len(coordinates) < 3:
+        return False, "Un polígono necesita al menos 3 puntos"
+    
+    for coord in coordinates:
+        if not isinstance(coord, list) or len(coord) != 2:
+            return False, "Cada coordenada debe tener [lat, lng]"
+        
+        try:
+            lat, lng = float(coord[0]), float(coord[1])
+            if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                return False, "Coordenadas fuera de rango válido"
+        except (ValueError, TypeError):
+            return False, "Las coordenadas deben ser números"
+    
+    return True, "OK"
+
+@app.post("/polygons")
+async def create_polygon(request: Request):
+    """Crear un nuevo polígono sin Pydantic"""
     global polygon_counter
+    
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    
+    # Validación manual
+    is_valid, error_msg = validate_polygon_data(data)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
     polygon_counter += 1
     polygon_id = f"polygon_{polygon_counter}"
     
+    # Obtener propiedades o usar vacío
+    properties = data.get('properties', {})
+    
     polygons_storage[polygon_id] = {
         "id": polygon_id,
-        "coordinates": polygon.coordinates,
-        "properties": polygon.properties
+        "coordinates": data['coordinates'],
+        "properties": properties
     }
     
-    return PolygonResponse(
-        id=polygon_id,
-        coordinates=polygon.coordinates,
-        properties=polygon.properties
-    )
+    return {
+        "id": polygon_id,
+        "coordinates": data['coordinates'],
+        "properties": properties
+    }
 
-@app.get("/polygons", response_model=List[PolygonResponse])
+@app.get("/polygons")
 async def get_polygons():
     """Obtener todos los polígonos"""
     return list(polygons_storage.values())
 
-@app.get("/polygons/{polygon_id}", response_model=PolygonResponse)
+@app.get("/polygons/{polygon_id}")
 async def get_polygon(polygon_id: str):
     """Obtener un polígono específico"""
     if polygon_id not in polygons_storage:
@@ -364,15 +389,25 @@ async def clear_all_polygons():
     polygons_storage = {}
     return {"message": "Todos los polígonos han sido eliminados"}
 
-@app.put("/polygons/{polygon_id}", response_model=PolygonResponse)
-async def update_polygon(polygon_id: str, polygon: Polygon):
+@app.put("/polygons/{polygon_id}")
+async def update_polygon(polygon_id: str, request: Request):
     """Actualizar un polígono existente"""
     if polygon_id not in polygons_storage:
         raise HTTPException(status_code=404, detail="Polígono no encontrado")
     
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    
+    # Validación manual
+    is_valid, error_msg = validate_polygon_data(data)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+    
     polygons_storage[polygon_id].update({
-        "coordinates": polygon.coordinates,
-        "properties": polygon.properties
+        "coordinates": data['coordinates'],
+        "properties": data.get('properties', {})
     })
     
     return polygons_storage[polygon_id]
