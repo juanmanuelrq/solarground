@@ -1,2 +1,6 @@
 fastapi==0.104.1
+<<<<<<< HEAD
 uvicorn[standard]==0.24.0
+=======
+uvicorn[standard]==0.24.0
+>>>>>>> c7e6f9ce2e00b642e52016fa15ab1991187372f1
