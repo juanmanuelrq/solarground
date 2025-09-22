@@ -1,2 +1,9 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+supabase==2.1.0
+python-dotenv==1.0.0
+asyncpg==0.29.0
+pvlib==0.13.0
+pandas==2.3.2
+geopandas==1.1.1

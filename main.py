@@ -1,306 +1,34 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from supabase import create_client, Client
+from dotenv import load_dotenv
+import os
 import json
+from datetime import datetime
+import uuid
+import solarground
+
+# Cargar variables de entorno
+load_dotenv()
 
 app = FastAPI(title="Mapa con Herramientas de Dibujo", version="1.0.0")
 
-# Almacenamiento temporal de polígonos
-polygons_storage = {}
-polygon_counter = 0
+# Servir archivos estáticos
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/", response_class=HTMLResponse)
-async def get_map():
-    """Retorna la página HTML con el mapa interactivo"""
-    html_content = """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Mapa con Herramientas de Dibujo</title>
-        
-        <!-- Leaflet CSS -->
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-        
-        <!-- Leaflet Draw CSS -->
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
-        
-        <style>
-            body {
-                margin: 0;
-                padding: 20px;
-                font-family: Arial, sans-serif;
-            }
-            
-            #map {
-                height: 600px;
-                width: 100%;
-                border: 2px solid #333;
-                border-radius: 10px;
-            }
-            
-            .controls {
-                margin: 20px 0;
-                padding: 15px;
-                background-color: #f5f5f5;
-                border-radius: 10px;
-            }
-            
-            .btn {
-                background-color: #007bff;
-                color: white;
-                border: none;
-                padding: 10px 15px;
-                margin: 5px;
-                border-radius: 5px;
-                cursor: pointer;
-            }
-            
-            .btn:hover {
-                background-color: #0056b3;
-            }
-            
-            .btn-danger {
-                background-color: #dc3545;
-            }
-            
-            .btn-danger:hover {
-                background-color: #c82333;
-            }
-            
-            .info-panel {
-                margin-top: 20px;
-                padding: 15px;
-                background-color: #e9ecef;
-                border-radius: 10px;
-            }
-            
-            .polygon-item {
-                background-color: white;
-                margin: 10px 0;
-                padding: 10px;
-                border-radius: 5px;
-                border: 1px solid #ddd;
-            }
-        </style>
-    </head>
-    <body>
-        <h1>🗺️ Mapa con Herramientas de Dibujo de Polígonos</h1>
-        
-        <div class="controls">
-            <button class="btn" onclick="enablePolygonDrawing()">✏️ Dibujar Polígono</button>
-            <button class="btn" onclick="toggleEditMode()">✂️ Editar Polígonos</button>
-            <button class="btn btn-danger" onclick="clearAllPolygons()">🗑️ Limpiar Todo</button>
-            <button class="btn" onclick="loadPolygons()">🔄 Cargar Polígonos</button>
-        </div>
-        
-        <div id="map"></div>
-        
-        <div class="info-panel">
-            <h3>📊 Polígonos Guardados</h3>
-            <div id="polygonsList"></div>
-        </div>
+# Configuración de Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-        <!-- Leaflet JS -->
-        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-        
-        <!-- Leaflet Draw JS -->
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
 
-        <script>
-            // Inicializar el mapa centrado en Medellín, Colombia
-            const map = L.map('map').setView([6.2442, -75.5812], 12);
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-            // Agregar capa de OpenStreetMap
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
-            }).addTo(map);
-
-            // Grupo de capas para los polígonos
-            const drawnItems = new L.FeatureGroup();
-            map.addLayer(drawnItems);
-
-            // Configurar controles de dibujo
-            const drawControl = new L.Control.Draw({
-                position: 'topright',
-                draw: {
-                    polygon: {
-                        allowIntersection: false,
-                        drawError: {
-                            color: '#e1e100',
-                            message: '<strong>Error:</strong> Las líneas del polígono no pueden cruzarse!'
-                        },
-                        shapeOptions: {
-                            color: '#97009c',
-                            weight: 3,
-                            fillOpacity: 0.3
-                        }
-                    },
-                    polyline: false,
-                    circle: false,
-                    rectangle: false,
-                    marker: false,
-                    circlemarker: false
-                },
-                edit: {
-                    featureGroup: drawnItems,
-                    remove: true
-                }
-            });
-
-            map.addControl(drawControl);
-
-            // Evento cuando se crea un polígono
-            map.on('draw:created', function (e) {
-                const layer = e.layer;
-                const coordinates = layer.getLatLngs()[0].map(latlng => [latlng.lat, latlng.lng]);
-                
-                // Agregar el polígono al mapa
-                drawnItems.addLayer(layer);
-                
-                // Guardar el polígono en el servidor
-                savePolygon(coordinates, {
-                    color: layer.options.color || '#97009c',
-                    created_at: new Date().toISOString()
-                });
-                
-                // Agregar popup con información
-                layer.bindPopup(`
-                    <div>
-                        <strong>Polígono</strong><br>
-                        Puntos: ${coordinates.length}<br>
-                        <button onclick="deletePolygonFromMap('${layer._leaflet_id}')">Eliminar</button>
-                    </div>
-                `);
-            });
-
-            // Evento cuando se edita un polígono
-            map.on('draw:edited', function (e) {
-                const layers = e.layers;
-                layers.eachLayer(function (layer) {
-                    const coordinates = layer.getLatLngs()[0].map(latlng => [latlng.lat, latlng.lng]);
-                    console.log('Polígono editado:', coordinates);
-                    // Aquí podrías actualizar el polígono en el servidor
-                });
-            });
-
-            // Evento cuando se elimina un polígono
-            map.on('draw:deleted', function (e) {
-                console.log('Polígonos eliminados');
-                updatePolygonsList();
-            });
-
-            // Funciones para los botones de control
-            function enablePolygonDrawing() {
-                alert('Usa las herramientas de dibujo en la esquina superior derecha del mapa');
-            }
-
-            function toggleEditMode() {
-                alert('Usa las herramientas de edición en la esquina superior derecha del mapa');
-            }
-
-            function clearAllPolygons() {
-                if (confirm('¿Estás seguro de que quieres eliminar todos los polígonos?')) {
-                    drawnItems.clearLayers();
-                    fetch('/polygons/clear', { method: 'DELETE' })
-                        .then(response => response.json())
-                        .then(data => {
-                            console.log('Polígonos eliminados del servidor');
-                            updatePolygonsList();
-                        })
-                        .catch(error => console.error('Error:', error));
-                }
-            }
-
-            function loadPolygons() {
-                fetch('/polygons')
-                    .then(response => response.json())
-                    .then(polygons => {
-                        drawnItems.clearLayers();
-                        
-                        polygons.forEach(polygon => {
-                            const latlngs = polygon.coordinates.map(coord => [coord[0], coord[1]]);
-                            const polygonLayer = L.polygon(latlngs, {
-                                color: polygon.properties.color || '#97009c',
-                                weight: 3,
-                                fillOpacity: 0.3
-                            });
-                            
-                            polygonLayer.bindPopup(`
-                                <div>
-                                    <strong>Polígono ${polygon.id}</strong><br>
-                                    Puntos: ${polygon.coordinates.length}<br>
-                                    Creado: ${polygon.properties.created_at || 'N/A'}
-                                </div>
-                            `);
-                            
-                            drawnItems.addLayer(polygonLayer);
-                        });
-                        
-                        updatePolygonsList();
-                    })
-                    .catch(error => console.error('Error cargando polígonos:', error));
-            }
-
-            // Función para guardar polígono en el servidor
-            async function savePolygon(coordinates, properties) {
-                try {
-                    const response = await fetch('/polygons', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            coordinates: coordinates,
-                            properties: properties
-                        })
-                    });
-                    
-                    if (response.ok) {
-                        const result = await response.json();
-                        console.log('Polígono guardado:', result);
-                        updatePolygonsList();
-                    } else {
-                        console.error('Error guardando polígono');
-                    }
-                } catch (error) {
-                    console.error('Error:', error);
-                }
-            }
-
-            // Función para actualizar la lista de polígonos
-            function updatePolygonsList() {
-                fetch('/polygons')
-                    .then(response => response.json())
-                    .then(polygons => {
-                        const listElement = document.getElementById('polygonsList');
-                        if (polygons.length === 0) {
-                            listElement.innerHTML = '<p>No hay polígonos guardados</p>';
-                            return;
-                        }
-                        
-                        listElement.innerHTML = polygons.map(polygon => `
-                            <div class="polygon-item">
-                                <strong>Polígono ${polygon.id}</strong> - 
-                                ${polygon.coordinates.length} puntos
-                                <br>
-                                <small>Creado: ${polygon.properties.created_at || 'N/A'}</small>
-                            </div>
-                        `).join('');
-                    })
-                    .catch(error => console.error('Error:', error));
-            }
-
-            // Cargar polígonos al inicio
-            loadPolygons();
-        </script>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
-
+# Funciones de validación manual
 def validate_polygon_data(data):
-    """Validación manual básica de los datos del polígono"""
+    """Validación manual de los datos del polígono"""
     if not isinstance(data, dict):
         return False, "Los datos deben ser un objeto JSON"
     
@@ -327,11 +55,22 @@ def validate_polygon_data(data):
     
     return True, "OK"
 
+@app.get("/", response_class=HTMLResponse)
+async def get_map():
+    """Servir la página HTML principal"""
+    try:
+        with open("static/index.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        return HTMLResponse(
+            content="<h1>Error: Archivo index.html no encontrado en static/</h1>",
+            status_code=404
+        )
+
 @app.post("/polygons")
 async def create_polygon(request: Request):
-    """Crear un nuevo polígono sin Pydantic"""
-    global polygon_counter
-    
+    """Crear un nuevo polígono en Supabase"""
     try:
         data = await request.json()
     except Exception:
@@ -342,75 +81,150 @@ async def create_polygon(request: Request):
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
     
-    polygon_counter += 1
-    polygon_id = f"polygon_{polygon_counter}"
-    
-    # Obtener propiedades o usar vacío
-    properties = data.get('properties', {})
-    
-    polygons_storage[polygon_id] = {
-        "id": polygon_id,
-        "coordinates": data['coordinates'],
-        "properties": properties
-    }
-    
-    return {
-        "id": polygon_id,
-        "coordinates": data['coordinates'],
-        "properties": properties
-    }
+    try:
+        # Preparar datos para insertar
+        insert_data = {
+            'coordinates': data['coordinates'],
+            'properties': data.get('properties', {})
+        }
+        
+        # Agregar nombre si existe
+        if 'name' in data and data['name']:
+            insert_data['name'] = data['name']
+        
+        result = supabase.table('polygons').insert(insert_data).execute()
+        
+        if result.data:
+            return result.data[0]
+        else:
+            raise HTTPException(status_code=400, detail="Error creando polígono")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error de base de datos: {str(e)}")
 
 @app.get("/polygons")
 async def get_polygons():
-    """Obtener todos los polígonos"""
-    return list(polygons_storage.values())
+    """Obtener todos los polígonos de Supabase"""
+    try:
+        result = supabase.table('polygons').select('*').order('created_at', desc=True).execute()
+        return result.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error de base de datos: {str(e)}")
 
 @app.get("/polygons/{polygon_id}")
 async def get_polygon(polygon_id: str):
-    """Obtener un polígono específico"""
-    if polygon_id not in polygons_storage:
-        raise HTTPException(status_code=404, detail="Polígono no encontrado")
-    
-    return polygons_storage[polygon_id]
+    """Obtener un polígono específico de Supabase"""
+    try:
+        result = supabase.table('polygons').select('*').eq('id', polygon_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Polígono no encontrado")
+        
+        return result.data[0]
+    except Exception as e:
+        if "no encontrado" in str(e):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Error de base de datos: {str(e)}")
 
 @app.delete("/polygons/{polygon_id}")
 async def delete_polygon(polygon_id: str):
-    """Eliminar un polígono específico"""
-    if polygon_id not in polygons_storage:
-        raise HTTPException(status_code=404, detail="Polígono no encontrado")
-    
-    del polygons_storage[polygon_id]
-    return {"message": f"Polígono {polygon_id} eliminado"}
+    """Eliminar un polígono específico de Supabase"""
+    try:
+        result = supabase.table('polygons').delete().eq('id', polygon_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Polígono no encontrado")
+        
+        return {"message": f"Polígono {polygon_id} eliminado de Supabase"}
+    except Exception as e:
+        if "no encontrado" in str(e):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Error de base de datos: {str(e)}")
 
 @app.delete("/polygons/clear")
 async def clear_all_polygons():
-    """Eliminar todos los polígonos"""
-    global polygons_storage
-    polygons_storage = {}
-    return {"message": "Todos los polígonos han sido eliminados"}
+    """Eliminar todos los polígonos de Supabase"""
+    try:
+        result = supabase.table('polygons').delete().neq('id', '00000000-0000-0000-0000-000000000000').execute()
+        return {"message": f"{len(result.data) if result.data else 0} polígonos eliminados de Supabase"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error de base de datos: {str(e)}")
 
 @app.put("/polygons/{polygon_id}")
 async def update_polygon(polygon_id: str, request: Request):
-    """Actualizar un polígono existente"""
-    if polygon_id not in polygons_storage:
-        raise HTTPException(status_code=404, detail="Polígono no encontrado")
-    
+    """Actualizar un polígono existente en Supabase"""
     try:
         data = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="JSON inválido")
     
-    # Validación manual
-    is_valid, error_msg = validate_polygon_data(data)
-    if not is_valid:
-        raise HTTPException(status_code=400, detail=error_msg)
+    try:
+        # Construir datos de actualización
+        update_data = {}
+        
+        if 'name' in data:
+            update_data['name'] = data['name']
+            
+        if 'coordinates' in data:
+            is_valid, error_msg = validate_polygon_data(data)
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=error_msg)
+            update_data['coordinates'] = data['coordinates']
+            
+        if 'properties' in data:
+            update_data['properties'] = data['properties']
+            
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No hay datos para actualizar")
+        
+        result = supabase.table('polygons').update(update_data).eq('id', polygon_id).execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Polígono no encontrado")
+        
+        return result.data[0]
+    except Exception as e:
+        if "no encontrado" in str(e) or "No hay datos" in str(e) or "JSON inválido" in str(e):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Error de base de datos: {str(e)}")
     
-    polygons_storage[polygon_id].update({
-        "coordinates": data['coordinates'],
-        "properties": data.get('properties', {})
-    })
+
+@app.get("/create_solar_data/{polygon_id}")
+async def create_solar_data(polygon_id: str):
+    """Generar datos solares para un polígono específico"""
     
-    return polygons_storage[polygon_id]
+    print("polygon_id",polygon_id)
+    # Obtener el polígono desde Supabase    
+
+    json_records = solarground.solar_agg(polygon_id)
+
+    try:        
+        # Por simplicidad, retornamos un mensaje simulado
+        return {"message": f"Datos solares generados para el polígono {json_records}"}
+    
+    except Exception as e:
+        if "no encontrado" in str(e):
+            raise e
+        raise HTTPException(status_code=500, detail="Error de base de datos: {"+str(e)+str(result)+"}")
+
+
+
+@app.get("/health")
+async def health_check():
+    """Endpoint para verificar la salud de la aplicación y conexión con Supabase"""
+    try:
+        # Probar conexión con Supabase
+        result = supabase.table('polygons').select('id').limit(1).execute()
+        return {
+            "status": "healthy",
+            "supabase": "connected",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Error de conexión con Supabase: {str(e)}")
+    
+
+
 
 if __name__ == "__main__":
     import uvicorn
