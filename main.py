@@ -26,6 +26,26 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+# Autenticación con usuario y contraseña
+email = os.getenv("SUPABASE_USER")  # Reemplaza con el correo del usuario
+password = os.getenv("SUPABASE_PASSWORD")  # Reemplaza con la contraseña
+
+auth_response = supabase.auth.sign_in_with_password({
+    "email": email,
+    "password": password
+})
+
+# Verificar si la autenticación fue exitosa
+if auth_response.user:
+    print("Autenticación exitosa:", auth_response.user.email)
+else:
+    print("Error de autenticación:", auth_response)
+
+
+
+
+
 # Funciones de validación manual
 def validate_polygon_data(data):
     """Validación manual de los datos del polígono"""
@@ -93,7 +113,9 @@ async def create_polygon(request: Request):
             insert_data['name'] = data['name']
         
         result = supabase.table('polygons').insert(insert_data).execute()
-        
+        solarground.update_fc_energia_solar()
+
+
         if result.data:
             return result.data[0]
         else:

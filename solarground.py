@@ -245,3 +245,16 @@ def solar_agg(polygon_id):
             print("Error de autenticación:", auth_response)
 
       return df_day, df_month, df_year
+
+
+def update_fc_energia_solar():
+
+      response = supabase.table('polygons_without_solar').select('*').execute()
+
+      # Acceder a los datos
+      for item in response.data:
+            print(item['id'])
+            solar_agg(item['id'])
+            
+      return "Proceso completado"
+
