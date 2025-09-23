@@ -11,3 +11,5 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+options:
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
