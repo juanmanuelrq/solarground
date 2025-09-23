@@ -21,3 +21,5 @@ steps:
 images:
   - 'gcr.io/$PROJECT_ID/fastapi-app'
 
+options:
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
